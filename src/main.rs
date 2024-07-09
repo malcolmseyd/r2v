@@ -48,12 +48,47 @@ fn main() -> Result<()> {
 
 const GENERATIONS: u64 = 1000;
 
+enum Shape {
+    /// Circle centered on cx and cy
+    Circle { cx: f32, cy: f32, radius: f32 },
+}
+
+struct Gene {
+    shapes: Vec<Shape>,
+}
+
+type Population = Vec<Gene>;
+
 fn run(input: RgbaImage) -> Result<Vec<u8>> {
-    // TODO: rough skeleton of genetic algorithm
-    // TODO: use tiny_skia to draw of random color and location onto a Pixmap
+    // TODO: use tiny_skia to draw circles of random color and location onto a Pixmap
     // TODO: use MSE to calculate total error
-    for i in 0..GENERATIONS {}
+    let mut prev: Population = init_generation();
+
+    for _ in 0..GENERATIONS {
+        let parents = select_parents(prev);
+        let mut current = crossover_genes(parents);
+        mutate_genes(&mut current);
+        prev = current;
+    }
 
     let output = Vec::new();
     Ok(output)
+}
+
+fn init_generation() -> Population {
+    todo!()
+}
+
+fn select_parents(prev: Population) -> Population {
+    // TODO: evaluate fitness of parents and prune the worst
+    prev
+}
+
+fn crossover_genes(parents: Population) -> Population {
+    // TODO: share objects from parents randomly
+    parents
+}
+
+fn mutate_genes(current: &mut Population) {
+    // TODO: mutate the new generation randomly
 }
