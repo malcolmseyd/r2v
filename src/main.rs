@@ -9,7 +9,9 @@ use std::{
 use anyhow::{Context, Ok, Result};
 use clap::Parser;
 use image::{io::Reader as ImageReader, Rgba};
-use tiny_skia::{IntSize, Pixmap, PixmapRef};
+use tiny_skia::{
+    Color, IntSize, Paint, PathBuilder, Pixmap, PixmapMut, PixmapRef, Shader, Transform,
+};
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -56,10 +58,11 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-const GENERATIONS: usize = 1000;
+const GENERATIONS: usize = 500;
 const GENERATION_SIZE: usize = 1000;
-const GENERATION_PARENTS: usize = GENERATION_SIZE * 5 / 10;
+const GENERATION_PARENTS: usize = GENERATION_SIZE / 2;
 
+#[derive(Clone)]
 enum Shape {
     /// Circle centered on `cx` and `cy` with radius `r`
     Circle {
@@ -71,6 +74,27 @@ enum Shape {
 }
 
 impl Shape {
+    fn render(&self, output: &mut PixmapMut) {
+        match self {
+            Self::Circle { cx, cy, r, color } => {
+                let path = PathBuilder::from_circle(*cx, *cy, *r).expect("circle has invalid path");
+                let paint = Paint {
+                    shader: Shader::SolidColor(Color::from_rgba8(
+                        color.0[0], color.0[1], color.0[2], color.0[3],
+                    )),
+                    ..Paint::default()
+                };
+                output.fill_path(
+                    &path,
+                    &paint,
+                    tiny_skia::FillRule::Winding,
+                    Transform::identity(),
+                    None,
+                );
+            }
+        }
+    }
+
     fn to_svg(&self, w: &mut impl Write) -> Result<()> {
         match self {
             Self::Circle { cx, cy, r, color } => {
@@ -85,11 +109,18 @@ impl Shape {
     }
 }
 
+#[derive(Clone)]
 struct Gene {
     shapes: Vec<Shape>,
 }
 
 impl Gene {
+    fn render(&self, mut output: PixmapMut) {
+        for shape in self.shapes.iter() {
+            shape.render(&mut output);
+        }
+    }
+
     fn to_svg(&self, input: PixmapRef, w: &mut impl Write) -> Result<()> {
         write!(
             w,
@@ -110,12 +141,11 @@ impl Gene {
 type Population = Vec<Gene>;
 
 fn run(input: PixmapRef) -> Result<Vec<u8>> {
-    // TODO: use tiny_skia to draw circles of random color and location onto a Pixmap
-    // TODO: use MSE to calculate total error
     let mut prev: Population = init_generation();
     let mut rng = StdRng::from_entropy();
 
-    for _ in 0..GENERATIONS {
+    for i in 0..GENERATIONS {
+        println!("{i}/{GENERATIONS}");
         let parents = select_parents(input, prev);
         let mut current = crossover_genes(&mut rng, parents);
         mutate_genes(&mut rng, input, &mut current);
@@ -144,30 +174,57 @@ fn init_generation() -> Population {
 
 fn select_parents(input: PixmapRef, prev: Population) -> Population {
     let mut results = prev
+        // .into_iter()
         .into_par_iter()
         .map(|gene| (evaluate(input, &gene), gene))
         .collect::<Vec<_>>();
 
+    // lowest error first
     results.sort_by(|(score_a, _), (score_b, _)| score_a.total_cmp(score_b));
+    results.truncate(GENERATION_SIZE);
 
-    // TODO: prune the worst
+    println!("{} - {}", results[0].0, results[results.len() - 1].0);
 
     results.into_iter().map(|(_, gene)| gene).collect()
 }
 
-fn evaluate(input: PixmapRef, gene: &Gene) -> f32 {
-    // TODO: calculate error on pixels
-    0.0
+/// Returns the Mean Squared Error in the image
+fn evaluate(input: PixmapRef, gene: &Gene) -> f64 {
+    let mut output =
+        Pixmap::new(input.width(), input.height()).expect("failed to create output pixmap");
+    gene.render(output.as_mut());
+
+    let mut error = 0.0f64;
+    for (i, o) in input.pixels().iter().zip(output.pixels().iter()) {
+        error += (i.red() as i32 - o.red() as i32).pow(2) as f64;
+        error += (i.green() as i32 - o.green() as i32).pow(2) as f64;
+        error += (i.blue() as i32 - o.blue() as i32).pow(2) as f64;
+    }
+    error /= (output.height() * output.width()) as f64;
+
+    error
 }
 
 fn crossover_genes(rng: &mut impl Rng, parents: Population) -> Population {
-    // TODO: share genes from parents randomly
-    parents
+    let mut current = parents;
+
+    for _ in 0..(GENERATION_SIZE - GENERATION_PARENTS) {
+        // TODO: share genes from parents randomly
+        current.push(
+            current
+                .choose(rng)
+                .expect("parents must not be empty")
+                .clone(),
+        );
+    }
+
+    current
 }
 
 fn mutate_genes(rng: &mut impl Rng, input: PixmapRef, current: &mut Population) {
     let w = input.width() as f32;
     let h = input.height() as f32;
+
     for p in current.iter_mut() {
         // add shape
         if rng.gen_ratio(1, 10) {
@@ -180,7 +237,10 @@ fn mutate_genes(rng: &mut impl Rng, input: PixmapRef, current: &mut Population) 
                 cy: rng.gen_range(-r..h + r),
                 r,
                 color,
-            })
+            });
         }
+
+        // TODO: mutate existing shape with low probability
+        // TODO: delete existing shape with very low probability
     }
 }
