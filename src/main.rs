@@ -2,6 +2,7 @@ use rand::prelude::*;
 use rayon::prelude::*;
 
 use std::{
+    cell::Cell,
     fs::File,
     io::{stdin, stdout, Cursor, Read, Write},
 };
@@ -10,8 +11,8 @@ use anyhow::{Context, Ok, Result};
 use clap::Parser;
 use image::io::Reader as ImageReader;
 use tiny_skia::{
-    BlendMode, Color, IntSize, Paint, PathBuilder, Pixmap, PixmapMut, PixmapRef,
-    PremultipliedColorU8, Shader, Transform,
+    Color, IntSize, Paint, PathBuilder, Pixmap, PixmapMut, PixmapRef, PremultipliedColorU8, Shader,
+    Transform,
 };
 
 #[derive(Parser, Debug)]
@@ -59,7 +60,7 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-const GENERATIONS: usize = 500;
+const GENERATIONS: usize = 1000;
 const GENERATION_SIZE: usize = 1000;
 const GENERATION_PARENTS: usize = GENERATION_SIZE / 2;
 
@@ -119,6 +120,7 @@ impl Shape {
 #[derive(Clone)]
 struct Gene {
     shapes: Vec<Shape>,
+    eval: Cell<Option<f64>>,
 }
 
 impl Gene {
@@ -173,7 +175,10 @@ fn init_generation() -> Population {
 
     for _ in 0..GENERATION_SIZE {
         let shapes = Vec::new();
-        init.push(Gene { shapes });
+        init.push(Gene {
+            shapes,
+            eval: Cell::new(None),
+        });
     }
 
     init
@@ -197,6 +202,10 @@ fn select_parents(input: PixmapRef, prev: Population) -> Population {
 
 /// Returns the Mean Squared Error in the image
 fn evaluate(input: PixmapRef, gene: &Gene) -> f64 {
+    if let Some(error) = gene.eval.get() {
+        return error;
+    }
+
     let mut output =
         Pixmap::new(input.width(), input.height()).expect("failed to create output pixmap");
     gene.render(output.as_mut());
@@ -208,6 +217,8 @@ fn evaluate(input: PixmapRef, gene: &Gene) -> f64 {
         error += (i.blue() as i32 - o.blue() as i32).pow(2) as f64;
     }
     error /= (output.height() * output.width()) as f64;
+
+    gene.eval.set(Some(error));
 
     error
 }
@@ -232,6 +243,7 @@ fn mutate_genes(rng: &mut impl Rng, input: PixmapRef, current: &mut Population) 
     let w = input.width() as f32;
     let h = input.height() as f32;
 
+    // Don't forget to reset p.eval if you change anything!
     for p in current.iter_mut() {
         // add shape
         if rng.gen_ratio(1, 10) {
@@ -248,6 +260,7 @@ fn mutate_genes(rng: &mut impl Rng, input: PixmapRef, current: &mut Population) 
                 r,
                 color,
             });
+            p.eval.set(None)
         }
 
         // TODO: mutate existing shape with low probability
