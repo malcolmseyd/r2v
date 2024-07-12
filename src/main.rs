@@ -8,9 +8,10 @@ use std::{
 
 use anyhow::{Context, Ok, Result};
 use clap::Parser;
-use image::{io::Reader as ImageReader, Rgba};
+use image::io::Reader as ImageReader;
 use tiny_skia::{
-    Color, IntSize, Paint, PathBuilder, Pixmap, PixmapMut, PixmapRef, Shader, Transform,
+    BlendMode, Color, IntSize, Paint, PathBuilder, Pixmap, PixmapMut, PixmapRef,
+    PremultipliedColorU8, Shader, Transform,
 };
 
 #[derive(Parser, Debug)]
@@ -69,7 +70,7 @@ enum Shape {
         cx: f32,
         cy: f32,
         r: f32,
-        color: Rgba<u8>,
+        color: PremultipliedColorU8,
     },
 }
 
@@ -78,9 +79,13 @@ impl Shape {
         match self {
             Self::Circle { cx, cy, r, color } => {
                 let path = PathBuilder::from_circle(*cx, *cy, *r).expect("circle has invalid path");
+                // HACK: ignore the alpha for now
                 let paint = Paint {
                     shader: Shader::SolidColor(Color::from_rgba8(
-                        color.0[0], color.0[1], color.0[2], color.0[3],
+                        color.red(),
+                        color.green(),
+                        color.blue(),
+                        u8::MAX,
                     )),
                     ..Paint::default()
                 };
@@ -101,7 +106,9 @@ impl Shape {
                 write!(
                     w,
                     r#"<circle cx="{cx}" cy="{cy}" r="{r}" fill="rgb({} {} {})"/>"#,
-                    color.0[0], color.0[1], color.0[2]
+                    color.red(),
+                    color.green(),
+                    color.blue(),
                 )
             }
         }?;
@@ -229,7 +236,10 @@ fn mutate_genes(rng: &mut impl Rng, input: PixmapRef, current: &mut Population) 
         // add shape
         if rng.gen_ratio(1, 10) {
             // add circle
-            let color: Rgba<u8> = rng.gen::<[u8; 4]>().into();
+            let &color = input.pixels().choose(rng).expect("input is empty");
+            if color.alpha() == 0 {
+                continue;
+            }
 
             let r = rng.gen_range(0.0..=(w.max(h)));
             p.shapes.push(Shape::Circle {
