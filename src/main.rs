@@ -5,6 +5,7 @@ use std::{
     cell::Cell,
     fs::File,
     io::{stdin, stdout, Cursor, Read, Write},
+    sync::OnceLock,
 };
 
 use anyhow::{Context, Ok, Result};
@@ -15,7 +16,7 @@ use tiny_skia::{
     Transform,
 };
 
-#[derive(Parser, Debug)]
+#[derive(Parser, Debug, Default)]
 #[command(version, about, long_about = None)]
 struct Args {
     /// Filename of the SVG graphic to output
@@ -24,20 +25,40 @@ struct Args {
 
     /// Filename of the raster graphic to convert
     infile: Option<String>,
+
+    /// The number of generations to simulate
+    #[arg(long, short, default_value_t = 1000)]
+    generations: usize,
+
+    /// The size of each generation
+    #[arg(long, short, default_value_t = 1000)]
+    size: usize,
+
+    // A number in range [0,1] representing the percentage of each generation to keep as parents
+    #[arg(long, short, default_value_t = 0.5)]
+    parents: f64,
 }
 
-fn main() -> Result<()> {
-    let args = Args::parse();
+impl Args {
+    fn num_parents(&self) -> usize {
+        ((self.generations) as f64 * self.parents) as usize
+    }
+}
+static ARGS: OnceLock<Args> = OnceLock::new();
 
-    let input: &mut dyn Read = match &args.infile {
+fn main() -> Result<()> {
+    ARGS.set(Args::parse()).unwrap();
+
+    let input: &mut dyn Read = match &ARGS.get().unwrap().infile {
         Some(path) => &mut File::open(path).context("failed to open input file")?,
         None => &mut stdin(),
     };
 
-    let output: &mut dyn Write = if args.outfile == "-" {
+    let output: &mut dyn Write = if ARGS.get().unwrap().outfile == "-" {
         &mut stdout()
     } else {
-        &mut File::create(args.outfile).context("failed to open output file")?
+        &mut File::create(ARGS.get().unwrap().outfile.clone())
+            .context("failed to open output file")?
     };
 
     let mut input_buf = Vec::new();
@@ -59,10 +80,6 @@ fn main() -> Result<()> {
 
     Ok(())
 }
-
-const GENERATIONS: usize = 1000;
-const GENERATION_SIZE: usize = 1000;
-const GENERATION_PARENTS: usize = GENERATION_SIZE / 2;
 
 #[derive(Clone)]
 enum Shape {
@@ -150,18 +167,27 @@ impl Gene {
 type Population = Vec<Gene>;
 
 fn run(input: PixmapRef) -> Result<Vec<u8>> {
-    let mut prev: Population = init_generation();
     let mut rng = StdRng::from_entropy();
 
-    for i in 0..GENERATIONS {
-        println!("{i}/{GENERATIONS}");
+    let mut prev: Population = init_generation();
+
+    let generations = ARGS.get().unwrap().generations;
+
+    for i in 0..ARGS.get().unwrap().generations {
+        println!("{i}/{generations}");
+
         let parents = select_parents(input, prev);
+        println!("parents seleted");
+
         let mut current = crossover_genes(&mut rng, parents);
+        println!("genes crossed over");
+
         mutate_genes(&mut rng, input, &mut current);
+        println!("genes mutated");
+
         prev = current;
     }
 
-    // TODO: properly select the best for output
     let best = &prev[0];
 
     let mut output = Vec::new();
@@ -173,7 +199,7 @@ fn run(input: PixmapRef) -> Result<Vec<u8>> {
 fn init_generation() -> Population {
     let mut init: Population = Vec::new();
 
-    for _ in 0..GENERATION_SIZE {
+    for _ in 0..ARGS.get().unwrap().size {
         let shapes = Vec::new();
         init.push(Gene {
             shapes,
@@ -193,7 +219,7 @@ fn select_parents(input: PixmapRef, prev: Population) -> Population {
 
     // lowest error first
     results.sort_by(|(score_a, _), (score_b, _)| score_a.total_cmp(score_b));
-    results.truncate(GENERATION_SIZE);
+    results.truncate(ARGS.get().unwrap().num_parents());
 
     println!("{} - {}", results[0].0, results[results.len() - 1].0);
 
@@ -226,7 +252,7 @@ fn evaluate(input: PixmapRef, gene: &Gene) -> f64 {
 fn crossover_genes(rng: &mut impl Rng, parents: Population) -> Population {
     let mut current = parents;
 
-    for _ in 0..(GENERATION_SIZE - GENERATION_PARENTS) {
+    for _ in current.len()..ARGS.get().unwrap().size {
         // TODO: share genes from parents randomly
         current.push(
             current
