@@ -271,25 +271,60 @@ fn mutate_genes(rng: &mut impl Rng, input: PixmapRef, current: &mut Population) 
 
     // Don't forget to reset p.eval if you change anything!
     for p in current.iter_mut() {
-        // add shape
-        if rng.gen_ratio(1, 10) {
-            // add circle
-            let &color = input.pixels().choose(rng).expect("input is empty");
-            if color.alpha() == 0 {
-                continue;
-            }
 
-            let r = rng.gen_range(0.0..=(w.max(h)));
-            p.shapes.push(Shape::Circle {
-                cx: rng.gen_range(-r..w + r),
-                cy: rng.gen_range(-r..h + r),
-                r,
-                color,
-            });
-            p.eval.set(None)
+        // Delete existing shape with very low probability
+        if rng.gen_ratio(1, 100) {
+            if !p.shapes.is_empty() {
+                // Remove a random shape, perhaps there is a way to remove shapes that contribute little to the evaluation function
+                let index = rng.gen_range(0..p.shapes.len());
+                p.shapes.remove(index);
+                p.eval.set(None);
+            }
         }
 
-        // TODO: mutate existing shape with low probability
-        // TODO: delete existing shape with very low probability
+        // TODO Dynamic mutations, where mutations become smaller as the generations progress
+        // Mutate existing shape with low probability
+        if rng.gen_ratio(1, 50) {
+            if let Some(shape) = p.shapes.choose_mut(rng) {
+                match shape {
+                    Shape::Circle { cx, cy, r, color } => {
+                        // Adjust position up to +/- 20% of image size
+                        *cx += rng.gen_range(-w * 0.2..=w * 0.2);
+                        *cy += rng.gen_range(-h * 0.2..=h * 0.2);
+
+                        *cx = cx.clamp(0.0, w);
+                        *cy = cy.clamp(0.0, h);
+
+                        // Adjust radius to be +/- 50% current size
+                        *r = rng.gen_range(*r * 0.5..=*r * 1.5);
+                        *r = r.clamp(0.0, w.max(h) / 10.0);
+
+                        // TODO Probably good to shift the colour slightly as well
+                        *color = input.pixel(*cx as u32, *cy as u32).unwrap_or(*color);
+                    }
+                }
+                p.eval.set(None);
+            }
+        }
+
+        // TODO Dynamic generation of new shapes, where new shapes are generated less frequently as the generations progress
+        // Add new shape with some probability
+        if rng.gen_ratio(1, 10) {
+            // Add circle
+            let r = rng.gen_range(0.0..=(w.max(h) / 10.0)); // Adjust max radius for more detailed shapes
+            let x = rng.gen_range(-r..w + r);
+            let y = rng.gen_range(-r..h + r);
+
+            // Choose pixel at x/y
+            if let Some(color) = input.pixel(x as u32, y as u32) {
+                p.shapes.push(Shape::Circle {
+                    cx: x,
+                    cy: y,
+                    r,
+                    color,
+                });
+                p.eval.set(None);
+            }
+        }
     }
 }
