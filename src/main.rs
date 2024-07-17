@@ -10,7 +10,7 @@ use std::{
 
 use anyhow::{Context, Ok, Result};
 use clap::Parser;
-use image::io::Reader as ImageReader;
+use image::{io::Reader as ImageReader, ImageBuffer, Rgba};
 use tiny_skia::{
     Color, IntSize, Paint, PathBuilder, Pixmap, PixmapMut, PixmapRef, PremultipliedColorU8, Shader,
     Transform,
@@ -34,9 +34,13 @@ struct Args {
     #[arg(long, short, default_value_t = 1000)]
     size: usize,
 
-    // A number in range [0,1] representing the percentage of each generation to keep as parents
+    ///  A number in range [0,1] representing the percentage of each generation to keep as parents
     #[arg(long, short, default_value_t = 0.5)]
     parents: f64,
+
+    /// The maximum dimension to downscale the image to, clamping either the height or width
+    #[arg(long, short, default_value_t = 64)]
+    max_dimension: u32,
 }
 
 impl Args {
@@ -69,16 +73,45 @@ fn main() -> Result<()> {
         .decode()?
         .into_rgba8();
 
+    let pixmap = to_pixmap(&img).context("failed to translate input to pixmap")?;
+
+    let output_buf = run(pixmap.as_ref())?;
+    output.write_all(&output_buf)?;
+
+    Ok(())
+}
+
+fn to_pixmap(img: &ImageBuffer<Rgba<u8>, Vec<u8>>) -> Result<Pixmap> {
+    let max_dimension = ARGS.get().unwrap().max_dimension;
+
+    let img = if max_dimension >= std::cmp::max(img.height(), img.width()) {
+        img.to_owned()
+    } else {
+        let (nwidth, nheight) = if img.width() > img.height() {
+            let nwidth: u32 = max_dimension;
+            let nheight = ((nwidth as f64) / (img.width() as f64) * img.height() as f64) as u32;
+            (nwidth, nheight)
+        } else {
+            let nheight: u32 = max_dimension;
+            let nwidth = ((nheight as f64) / (img.height() as f64) * img.width() as f64) as u32;
+            (nwidth, nheight)
+        };
+
+        image::imageops::resize(
+            img,
+            nwidth,
+            nheight,
+            image::imageops::FilterType::CatmullRom,
+        )
+    };
+
     let pixmap = {
         let size = IntSize::from_wh(img.width(), img.height())
             .context("failed to construct input pixbuf size")?;
         Pixmap::from_vec(img.into_vec(), size).context("failed to construct input pixbuf")?
     };
 
-    let output_buf = run(pixmap.as_ref())?;
-    output.write_all(&output_buf)?;
-
-    Ok(())
+    Ok(pixmap)
 }
 
 #[derive(Clone)]
@@ -177,13 +210,10 @@ fn run(input: PixmapRef) -> Result<Vec<u8>> {
         println!("{i}/{generations}");
 
         let parents = select_parents(input, prev);
-        println!("parents seleted");
 
         let mut current = crossover_genes(&mut rng, parents);
-        println!("genes crossed over");
 
         mutate_genes(&mut rng, input, &mut current);
-        println!("genes mutated");
 
         prev = current;
     }
@@ -221,7 +251,7 @@ fn select_parents(input: PixmapRef, prev: Population) -> Population {
     results.sort_by(|(score_a, _), (score_b, _)| score_a.total_cmp(score_b));
     results.truncate(ARGS.get().unwrap().num_parents());
 
-    println!("{} - {}", results[0].0, results[results.len() - 1].0);
+    println!("eval {} - {}", results[0].0, results[results.len() - 1].0);
 
     results.into_iter().map(|(_, gene)| gene).collect()
 }
@@ -271,7 +301,6 @@ fn mutate_genes(rng: &mut impl Rng, input: PixmapRef, current: &mut Population) 
 
     // Don't forget to reset p.eval if you change anything!
     for p in current.iter_mut() {
-
         // Delete existing shape with very low probability
         if rng.gen_ratio(1, 100) {
             if !p.shapes.is_empty() {
@@ -328,3 +357,4 @@ fn mutate_genes(rng: &mut impl Rng, input: PixmapRef, current: &mut Population) 
         }
     }
 }
+
