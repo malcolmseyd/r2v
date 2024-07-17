@@ -4,7 +4,7 @@ use rayon::prelude::*;
 use std::{
     cell::Cell,
     fs::File,
-    io::{stdin, stdout, Cursor, Read, Write},
+    io::{stdin, stdout, BufWriter, Cursor, Read, Write},
     sync::OnceLock,
 };
 
@@ -68,15 +68,19 @@ fn main() -> Result<()> {
     let mut input_buf = Vec::new();
     input.read_to_end(&mut input_buf)?;
 
+    // source of truth for original image
     let img = ImageReader::new(Cursor::new(input_buf))
         .with_guessed_format()?
         .decode()?
         .into_rgba8();
 
+    // downscaled, ready for use in the algorithm
     let pixmap = to_pixmap(&img).context("failed to translate input to pixmap")?;
 
-    let output_buf = run(pixmap.as_ref())?;
-    output.write_all(&output_buf)?;
+    let best_gene = run(pixmap.as_ref())?;
+    best_gene
+        .to_svg(&mut BufWriter::new(output), img.width(), img.height())
+        .context("failed to serialize SVG to file")?;
 
     Ok(())
 }
@@ -151,12 +155,15 @@ impl Shape {
         }
     }
 
-    fn to_svg(&self, w: &mut impl Write) -> Result<()> {
+    fn to_svg(&self, w: &mut impl Write, scale: f32) -> Result<()> {
         match self {
             Self::Circle { cx, cy, r, color } => {
                 write!(
                     w,
-                    r#"<circle cx="{cx}" cy="{cy}" r="{r}" fill="rgb({} {} {})"/>"#,
+                    r#"<circle cx="{}" cy="{}" r="{}" fill="rgb({} {} {})"/>"#,
+                    cx * scale,
+                    cy * scale,
+                    r * scale,
                     color.red(),
                     color.green(),
                     color.blue(),
@@ -180,17 +187,20 @@ impl Gene {
         }
     }
 
-    fn to_svg(&self, input: PixmapRef, w: &mut impl Write) -> Result<()> {
+    fn to_svg(&self, w: &mut impl Write, width: u32, height: u32) -> Result<()> {
         write!(
             w,
             r#"<svg viewBox="0 0 {} {}" xmlns="http://www.w3.org/2000/svg" width="{}" height="{}">"#,
-            input.width(),
-            input.height(),
-            input.width(),
-            input.height()
+            width, height, width, height
         )?;
+
+        let image_max_dimension = std::cmp::max(width, height);
+        let max_dimension = ARGS.get().unwrap().max_dimension;
+        // if <1 then we didn't scale it, clamp to 0
+        let scale = ((image_max_dimension as f64) / (max_dimension as f64)).max(1.0);
+
         for shape in self.shapes.iter() {
-            shape.to_svg(w)?
+            shape.to_svg(w, scale as f32)?
         }
         write!(w, r#"</svg>"#)?;
         Ok(())
@@ -199,7 +209,7 @@ impl Gene {
 
 type Population = Vec<Gene>;
 
-fn run(input: PixmapRef) -> Result<Vec<u8>> {
+fn run(input: PixmapRef) -> Result<Gene> {
     let mut rng = StdRng::from_entropy();
     let mut prev: Population = init_generation();
 
@@ -212,12 +222,7 @@ fn run(input: PixmapRef) -> Result<Vec<u8>> {
         prev = current;
     }
 
-    let best = &prev[0];
-
-    let mut output = Vec::new();
-    best.to_svg(input, &mut output)?;
-
-    Ok(output)
+    Ok(prev[0].clone())
 }
 
 fn init_generation() -> Population {
@@ -266,7 +271,8 @@ fn evaluate(input: PixmapRef, gene: &Gene) -> f64 {
         error += (i.green() as i32 - o.green() as i32).pow(2) as f64;
         error += (i.blue() as i32 - o.blue() as i32).pow(2) as f64;
     }
-    error /= (output.height() * output.width()) as f64;
+
+    error /= output.pixels().len() as f64;
 
     gene.eval.set(Some(error));
 
