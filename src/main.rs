@@ -1,8 +1,10 @@
+use itertools::Itertools;
 use rand::prelude::*;
 use rayon::prelude::*;
 
 use std::{
     cell::Cell,
+    cmp::max_by_key,
     fs::File,
     io::{stdin, stdout, BufWriter, Cursor, Read, Write},
     sync::{
@@ -230,7 +232,7 @@ impl Gene {
 type Population = Vec<Gene>;
 
 fn run(input: PixmapRef) -> Result<Gene> {
-    let mut rng = StdRng::from_entropy();
+    let mut rng = SmallRng::from_entropy();
     let mut prev: Population = init_generation();
 
     let generations = ARGS.get().unwrap().generations;
@@ -307,13 +309,30 @@ fn crossover_genes(rng: &mut impl Rng, parents: Population) -> Population {
     let mut current = parents;
 
     for _ in current.len()..ARGS.get().unwrap().size {
-        // TODO: share genes from parents randomly
-        current.push(
-            current
-                .choose(rng)
-                .expect("parents must not be empty")
-                .clone(),
-        );
+        let mut shapes = Vec::new();
+
+        let (a, b) = current
+            .choose_multiple(rng, 2)
+            .next_tuple()
+            .expect("crossover needs at least 2 genes");
+
+        for (sa, sb) in a.shapes.iter().zip(b.shapes.iter()) {
+            if rng.gen_ratio(1, 2) {
+                shapes.push(sa.clone())
+            } else {
+                shapes.push(sb.clone())
+            }
+        }
+
+        if a.shapes.len() != b.shapes.len() && rng.gen_ratio(1, 2) {
+            let biggest = max_by_key(a, b, |x| x.shapes.len());
+            shapes.extend(biggest.shapes.clone().into_iter().skip(shapes.len()));
+        }
+
+        current.push(Gene {
+            shapes,
+            eval: Cell::new(None),
+        });
     }
 
     current
