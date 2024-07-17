@@ -201,20 +201,14 @@ type Population = Vec<Gene>;
 
 fn run(input: PixmapRef) -> Result<Vec<u8>> {
     let mut rng = StdRng::from_entropy();
-
     let mut prev: Population = init_generation();
 
     let generations = ARGS.get().unwrap().generations;
-
     for i in 0..ARGS.get().unwrap().generations {
         println!("{i}/{generations}");
-
         let parents = select_parents(input, prev);
-
         let mut current = crossover_genes(&mut rng, parents);
-
         mutate_genes(&mut rng, input, &mut current);
-
         prev = current;
     }
 
@@ -302,13 +296,11 @@ fn mutate_genes(rng: &mut impl Rng, input: PixmapRef, current: &mut Population) 
     // Don't forget to reset p.eval if you change anything!
     for p in current.iter_mut() {
         // Delete existing shape with very low probability
-        if rng.gen_ratio(1, 100) {
-            if !p.shapes.is_empty() {
-                // Remove a random shape, perhaps there is a way to remove shapes that contribute little to the evaluation function
-                let index = rng.gen_range(0..p.shapes.len());
-                p.shapes.remove(index);
-                p.eval.set(None);
-            }
+        if rng.gen_ratio(1, 100) && !p.shapes.is_empty() {
+            // Remove a random shape, perhaps there is a way to remove shapes that contribute little to the evaluation function
+            let index = rng.gen_range(0..p.shapes.len());
+            p.shapes.remove(index);
+            p.eval.set(None);
         }
 
         // TODO Dynamic mutations, where mutations become smaller as the generations progress
@@ -357,4 +349,3 @@ fn mutate_genes(rng: &mut impl Rng, input: PixmapRef, current: &mut Population) 
         }
     }
 }
-
