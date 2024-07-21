@@ -364,8 +364,12 @@ fn mutate_genes(rng: &mut impl Rng, input: PixmapRef, current: &mut Population) 
             let x = rng.gen_range(-r..w + r);
             let y = rng.gen_range(-r..h + r);
 
-            // Choose pixel at x/y
-            if let Some(color) = input.pixel(x as u32, y as u32) {
+            // randomly sample color inside the shape's bounding box
+            let inside_x: u32 =
+                rng.gen_range((x - r).clamp(0.0, w) as u32..=(x + r).clamp(0.0, w) as u32);
+            let inside_y: u32 =
+                rng.gen_range((y - r).clamp(0.0, h) as u32..=(y + r).clamp(0.0, h) as u32);
+            if let Some(color) = input.pixel(inside_x, inside_y) {
                 p.shapes.push(Shape::Circle {
                     cx: x,
                     cy: y,
