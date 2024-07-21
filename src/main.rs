@@ -13,7 +13,7 @@ use std::{
     time::Duration,
 };
 
-use anyhow::{Context, Ok, Result};
+use anyhow::{anyhow, Context, Ok, Result};
 use clap::Parser;
 use image::{io::Reader as ImageReader, ImageBuffer, Rgba};
 use tiny_skia::{
@@ -72,15 +72,17 @@ fn main() -> Result<()> {
     }
 
     let input: &mut dyn Read = match &ARGS.get().unwrap().infile {
-        Some(path) => &mut File::open(path).context("failed to open input file")?,
+        Some(path) => &mut File::open(path)
+            .with_context(|| anyhow!("failed to open input file: {:?}", path))?,
         None => &mut stdin(),
     };
 
     let output: &mut dyn Write = if ARGS.get().unwrap().outfile == "-" {
         &mut stdout()
     } else {
-        &mut File::create(ARGS.get().unwrap().outfile.clone())
-            .context("failed to open output file")?
+        let path = &ARGS.get().unwrap().outfile;
+        &mut File::create(path)
+            .with_context(|| anyhow!("failed to open output file: {:?}", path))?
     };
 
     let mut input_buf = Vec::new();
