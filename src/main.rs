@@ -5,7 +5,12 @@ use std::{
     cell::Cell,
     fs::File,
     io::{stdin, stdout, BufWriter, Cursor, Read, Write},
-    sync::OnceLock,
+    sync::{
+        atomic::{self, AtomicBool},
+        OnceLock,
+    },
+    thread,
+    time::Duration,
 };
 
 use anyhow::{Context, Ok, Result};
@@ -30,6 +35,10 @@ struct Args {
     #[arg(long, short, default_value_t = 1000)]
     generations: usize,
 
+    /// The maximum time to run the simulation (in seconds)
+    #[arg(long, short = 't')]
+    max_time: Option<f64>,
+
     /// The size of each generation
     #[arg(long, short, default_value_t = 1000)]
     size: usize,
@@ -50,8 +59,17 @@ impl Args {
 }
 static ARGS: OnceLock<Args> = OnceLock::new();
 
+static STOP: AtomicBool = AtomicBool::new(false);
+
 fn main() -> Result<()> {
     ARGS.set(Args::parse()).unwrap();
+
+    if let Some(max_seconds) = ARGS.get().unwrap().max_time {
+        thread::spawn(move || {
+            thread::sleep(Duration::from_millis((max_seconds * 1000.0) as u64));
+            STOP.store(true, atomic::Ordering::Relaxed);
+        });
+    }
 
     let input: &mut dyn Read = match &ARGS.get().unwrap().infile {
         Some(path) => &mut File::open(path).context("failed to open input file")?,
@@ -215,6 +233,10 @@ fn run(input: PixmapRef) -> Result<Gene> {
 
     let generations = ARGS.get().unwrap().generations;
     for i in 0..ARGS.get().unwrap().generations {
+        if STOP.load(atomic::Ordering::Relaxed) {
+            println!("Hit time limit, stopping early...");
+            break;
+        }
         println!("{i}/{generations}");
         let parents = select_parents(input, prev);
         let mut current = crossover_genes(&mut rng, parents);
