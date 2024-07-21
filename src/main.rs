@@ -13,8 +13,17 @@ use clap::Parser;
 use image::io::Reader as ImageReader;
 use tiny_skia::{
     Color, IntSize, Paint, PathBuilder, Pixmap, PixmapMut, PixmapRef, PremultipliedColorU8, Shader,
-    Transform,
+    Transform, Rect,
 };
+
+use chrono::prelude::*;
+use chrono::Duration;
+
+extern crate image;
+extern crate nalgebra as na;
+
+// use image::{GenericImageView, Pixel};
+use na::DMatrix;
 
 #[derive(Parser, Debug, Default)]
 #[command(version, about, long_about = None)]
@@ -35,7 +44,7 @@ struct Args {
     size: usize,
 
     // A number in range [0,1] representing the percentage of each generation to keep as parents
-    #[arg(long, short, default_value_t = 0.5)]
+    #[arg(long, short, default_value_t = 0.05)]
     parents: f64,
 }
 
@@ -45,6 +54,18 @@ impl Args {
     }
 }
 static ARGS: OnceLock<Args> = OnceLock::new();
+
+// Wrapper function to measure the execution time of a function
+fn measure_time<F, R>(func: F) -> (Duration, R)
+where
+    F: FnOnce() -> R,
+{
+    let start = Utc::now();
+    let result = func();
+    let end = Utc::now();
+    let duration = end.signed_duration_since(start);
+    (duration, result)
+}
 
 fn main() -> Result<()> {
     ARGS.set(Args::parse()).unwrap();
@@ -90,6 +111,13 @@ enum Shape {
         r: f32,
         color: PremultipliedColorU8,
     },
+    Rect {
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        color: PremultipliedColorU8,
+    },
 }
 
 impl Shape {
@@ -98,6 +126,33 @@ impl Shape {
             Self::Circle { cx, cy, r, color } => {
                 let path = PathBuilder::from_circle(*cx, *cy, *r).expect("circle has invalid path");
                 // HACK: ignore the alpha for now
+                let paint = Paint {
+                    shader: Shader::SolidColor(Color::from_rgba8(
+                        color.red(),
+                        color.green(),
+                        color.blue(),
+                        u8::MAX,
+                    )),
+                    ..Paint::default()
+                };
+                output.fill_path(
+                    &path,
+                    &paint,
+                    tiny_skia::FillRule::Winding,
+                    Transform::identity(),
+                    None,
+                );
+            }
+            Self::Rect { x, y, w, h, color } => {
+                // Create tiny skia rect
+                Rect {
+                    x: *x,
+                    y: *y,
+                    width: *w,
+                    height: *h,
+                };
+
+                let path = PathBuilder::from(*x, *y, *w, *h).expect("rect has invalid path");
                 let paint = Paint {
                     shader: Shader::SolidColor(Color::from_rgba8(
                         color.red(),
@@ -173,20 +228,35 @@ fn run(input: PixmapRef) -> Result<Vec<u8>> {
 
     let generations = ARGS.get().unwrap().generations;
 
+    // Logging info
+    // let mut total_time = Duration::zero();
+    let mut select_parents_time = Duration::zero();
+    let mut crossover_genes_time = Duration::zero();
+    let mut mutate_genes_time = Duration::zero();
+
     for i in 0..ARGS.get().unwrap().generations {
         println!("{i}/{generations}");
 
-        let parents = select_parents(input, prev);
-        println!("parents seleted");
+        let (duration, parents) = measure_time(|| select_parents(input, prev));
+        select_parents_time = select_parents_time + duration;
+        // println!("parents seleted");
 
-        let mut current = crossover_genes(&mut rng, parents);
-        println!("genes crossed over");
+        let(duration, mut current) = measure_time(|| crossover_genes(&mut rng, parents));
+        crossover_genes_time = crossover_genes_time + duration;
+        // println!("genes crossed over");
 
-        mutate_genes(&mut rng, input, &mut current);
-        println!("genes mutated");
+        let duration = measure_time(|| mutate_genes(&mut rng, input, &mut current));
+        mutate_genes_time = mutate_genes_time + duration.0;
+        // println!("genes mutated");
 
         prev = current;
     }
+
+    // Print logging info
+    // println!("Total time: {} ms", total_time.num_milliseconds());
+    println!("Select parents time: {} ms ", select_parents_time.num_milliseconds());
+    println!("Crossover genes time: {} ms", crossover_genes_time.num_milliseconds());
+    println!("Mutate genes time: {} ms", mutate_genes_time.num_milliseconds());
 
     let best = &prev[0];
 
@@ -226,7 +296,7 @@ fn select_parents(input: PixmapRef, prev: Population) -> Population {
     results.into_iter().map(|(_, gene)| gene).collect()
 }
 
-/// Returns the Mean Squared Error in the image
+// Returns the Mean Squared Error in the image, with a penalty for the number of shapes
 fn evaluate(input: PixmapRef, gene: &Gene) -> f64 {
     if let Some(error) = gene.eval.get() {
         return error;
@@ -244,10 +314,81 @@ fn evaluate(input: PixmapRef, gene: &Gene) -> f64 {
     }
     error /= (output.height() * output.width()) as f64;
 
+    // Penalty term for the number of shapes
+    // let shape_penalty = gene.shapes.len() as f64 * 0.5; // Adjust the penalty coefficient as needed
+    // let total_error = error + shape_penalty;
+
     gene.eval.set(Some(error));
 
     error
 }
+
+fn mean(matrix: &DMatrix<f64>) -> f64 {
+    matrix.iter().sum::<f64>() / matrix.len() as f64
+}
+
+fn variance(matrix: &DMatrix<f64>, mean: f64) -> f64 {
+    matrix.iter().map(|&x| (x - mean).powi(2)).sum::<f64>() / (matrix.len() as f64 - 1.0)
+}
+
+fn covariance(matrix1: &DMatrix<f64>, matrix2: &DMatrix<f64>, mean1: f64, mean2: f64) -> f64 {
+    matrix1.iter().zip(matrix2.iter())
+        .map(|(&x1, &x2)| (x1 - mean1) * (x2 - mean2))
+        .sum::<f64>() / (matrix1.len() as f64 - 1.0)
+}
+
+fn ssim(img1: &DMatrix<f64>, img2: &DMatrix<f64>) -> f64 {
+    let k1 = 0.01;
+    let k2 = 0.03;
+    let l = 255.0;
+    let c1 = (k1 * l) * (k1 * l);
+    let c2 = (k2 * l) * (k2 * l);
+
+    let mu1 = mean(img1);
+    let mu2 = mean(img2);
+    let sigma1_sq = variance(img1, mu1);
+    let sigma2_sq = variance(img2, mu2);
+    let sigma12 = covariance(img1, img2, mu1, mu2);
+
+    ((2.0 * mu1 * mu2 + c1) * (2.0 * sigma12 + c2)) / ((mu1 * mu1 + mu2 * mu2 + c1) * (sigma1_sq + sigma2_sq + c2))
+}
+
+fn to_grayscale_matrix(img: &PixmapRef) -> DMatrix<f64> {
+    let (width, height) = (img.width() as usize, img.height() as usize);
+    let mut data = Vec::with_capacity(width * height);
+
+    for pixel in img.pixels() {
+        let gray = 0.299 * pixel.red() as f64 + 0.587 * pixel.green() as f64 + 0.114 * pixel.blue() as f64;
+        data.push(gray);
+    }
+
+    DMatrix::from_vec(height, width, data)
+}
+
+/// Returns the SSIM index for the image, with a penalty for the number of shapes
+// fn evaluate(input: PixmapRef, gene: &Gene) -> f64 {
+//     if let Some(error) = gene.eval.get() {
+//         return error;
+//     }
+
+//     let mut output =
+//         Pixmap::new(input.width(), input.height()).expect("failed to create output pixmap");
+//     gene.render(output.as_mut());
+
+//     let input_matrix = to_grayscale_matrix(&input);
+//     let output_matrix = to_grayscale_matrix(&output.as_ref());
+
+//     let ssim_index = ssim(&input_matrix, &output_matrix);
+
+//     // Penalty term for the number of shapes
+//     // let shape_penalty = gene.shapes.len() as f64 * 0.1; // Adjust the penalty coefficient as needed
+
+//     let total_error = 1.0 - ssim_index; // SSIM ranges from 0 to 1, so 1 - SSIM will be the error
+
+//     gene.eval.set(Some(total_error));
+
+//     total_error
+// }
 
 fn crossover_genes(rng: &mut impl Rng, parents: Population) -> Population {
     let mut current = parents;
@@ -317,12 +458,25 @@ fn mutate_genes(rng: &mut impl Rng, input: PixmapRef, current: &mut Population) 
 
             // Choose pixel at x/y
             if let Some(color) = input.pixel(x as u32, y as u32) {
-                p.shapes.push(Shape::Circle {
-                    cx: x,
-                    cy: y,
-                    r,
-                    color,
-                });
+                // Determine shape to add
+                if (rng.gen_ratio(1, 2)) {
+                    p.shapes.push(Shape::Square {
+                        x,
+                        y,
+                        w: r,
+                        h: r,
+                        color,
+                    });
+                } 
+                else 
+                {
+                    p.shapes.push(Shape::Circle {
+                        cx: x,
+                        cy: y,
+                        r,
+                        color,
+                    });
+                }
                 p.eval.set(None);
             }
         }
