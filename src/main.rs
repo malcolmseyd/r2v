@@ -1,3 +1,4 @@
+use cached::proc_macro::cached;
 use itertools::Itertools;
 use rand::prelude::*;
 use rayon::prelude::*;
@@ -6,6 +7,7 @@ use std::{
     cell::Cell,
     cmp::max_by_key,
     fs::File,
+    hash::Hash,
     io::{stdin, stdout, BufWriter, Cursor, Read, Write},
     sync::{
         atomic::{self, AtomicBool},
@@ -140,7 +142,7 @@ fn to_pixmap(img: &ImageBuffer<Rgba<u8>, Vec<u8>>) -> Result<Pixmap> {
     Ok(pixmap)
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 enum Shape {
     /// Circle centered on `cx` and `cy` with radius `r`
     Circle {
@@ -151,18 +153,37 @@ enum Shape {
     },
 }
 
+// marker trait
+impl Eq for Shape {}
+
+impl Hash for Shape {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        core::mem::discriminant(self).hash(state);
+        match self {
+            Self::Circle { cx, cy, r, color } => {
+                cx.to_bits().hash(state);
+                cy.to_bits().hash(state);
+                r.to_bits().hash(state);
+                color.red().hash(state);
+                color.green().hash(state);
+                color.blue().hash(state);
+                color.alpha().hash(state);
+            }
+        }
+    }
+}
+
 impl Shape {
     fn render(&self, output: &mut PixmapMut) {
         match self {
             Self::Circle { cx, cy, r, color } => {
                 let path = PathBuilder::from_circle(*cx, *cy, *r).expect("circle has invalid path");
-                // HACK: ignore the alpha for now
                 let paint = Paint {
                     shader: Shader::SolidColor(Color::from_rgba8(
                         color.red(),
                         color.green(),
                         color.blue(),
-                        u8::MAX,
+                        color.alpha(),
                     )),
                     ..Paint::default()
                 };
@@ -202,11 +223,40 @@ struct Gene {
     eval: Cell<Option<f64>>,
 }
 
+impl PartialEq for Gene {
+    fn eq(&self, other: &Self) -> bool {
+        self.shapes == other.shapes
+    }
+}
+
+impl Eq for Gene {}
+
+impl Hash for Gene {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.shapes.hash(state);
+    }
+}
+
+#[cached(size = 10000)]
+fn render_shapes(width: u32, height: u32, shapes: Vec<Shape>) -> Pixmap {
+    if shapes.is_empty() {
+        return Pixmap::new(width, height).unwrap();
+    }
+    let mut p = render_shapes(width, height, shapes[..shapes.len() - 1].to_vec());
+    shapes[shapes.len() - 1].render(&mut p.as_mut());
+    p
+}
+
 impl Gene {
-    fn render(&self, mut output: PixmapMut) {
-        for shape in self.shapes.iter() {
-            shape.render(&mut output);
+    fn new(shapes: Vec<Shape>) -> Self {
+        Gene {
+            shapes,
+            eval: Cell::new(None),
         }
+    }
+
+    fn render(&self, width: u32, height: u32) -> Pixmap {
+        render_shapes(width, height, self.shapes.clone())
     }
 
     fn to_svg(&self, w: &mut impl Write, width: u32, height: u32) -> Result<()> {
@@ -256,10 +306,7 @@ fn init_generation() -> Population {
 
     for _ in 0..ARGS.get().unwrap().size {
         let shapes = Vec::new();
-        init.push(Gene {
-            shapes,
-            eval: Cell::new(None),
-        });
+        init.push(Gene::new(shapes));
     }
 
     init
@@ -287,9 +334,7 @@ fn evaluate(input: PixmapRef, gene: &Gene) -> f64 {
         return error;
     }
 
-    let mut output =
-        Pixmap::new(input.width(), input.height()).expect("failed to create output pixmap");
-    gene.render(output.as_mut());
+    let output = gene.render(input.width(), input.height());
 
     let mut error = 0.0f64;
     for (i, o) in input.pixels().iter().zip(output.pixels().iter()) {
@@ -309,6 +354,17 @@ fn crossover_genes(rng: &mut impl Rng, parents: Population) -> Population {
     let mut current = parents;
 
     for _ in current.len()..ARGS.get().unwrap().size {
+        // elitism, just copy the parent unmodified
+        if rng.gen_ratio(4, 5) {
+            current.push(
+                current
+                    .choose(rng)
+                    .expect("parents must not be empty")
+                    .clone(),
+            );
+            continue;
+        }
+
         let mut shapes = Vec::new();
 
         let (a, b) = current
@@ -329,10 +385,7 @@ fn crossover_genes(rng: &mut impl Rng, parents: Population) -> Population {
             shapes.extend(biggest.shapes.clone().into_iter().skip(shapes.len()));
         }
 
-        current.push(Gene {
-            shapes,
-            eval: Cell::new(None),
-        });
+        current.push(Gene::new(shapes));
     }
 
     current

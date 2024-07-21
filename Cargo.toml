@@ -8,6 +8,7 @@ debug = true
 
 [dependencies]
 anyhow = "1.0.86"
+cached = "0.53.0"
 clap = { version = "4.5.8", features = ["derive"] }
 image = "0.25.1"
 itertools = "0.13.0"
