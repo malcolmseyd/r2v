@@ -301,7 +301,10 @@ fn run(input: PixmapRef) -> Result<Gene> {
 
         let elapsed = start.elapsed();
         // println!("Elapsed time: {:.2?} seconds, {i}/{generations}, eval {:.2?} - {:.2?}", elapsed.as_secs_f64(), prev[0].eval.get().unwrap_or_default(), prev[prev.len() - 1].eval.get().unwrap_or_default());
-        println!("Elapsed time: {:.2?} seconds, {i}/{generations}", elapsed.as_secs_f64());
+        println!(
+            "Elapsed time: {:.6} seconds, {i}/{generations}",
+            elapsed.as_secs_f64()
+        );
     }
 
     let best = &prev[0];
