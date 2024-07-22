@@ -14,7 +14,7 @@ use std::{
         OnceLock,
     },
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use anyhow::{anyhow, Context, Ok, Result};
@@ -48,7 +48,7 @@ struct Args {
     size: usize,
 
     ///  A number in range [0,1] representing the percentage of each generation to keep as parents
-    #[arg(long, short, default_value_t = 0.5)]
+    #[arg(long, short, default_value_t = 0.05)]
     parents: f64,
 
     /// The maximum dimension to downscale the image to, clamping either the height or width
@@ -282,6 +282,8 @@ impl Gene {
 type Population = Vec<Gene>;
 
 fn run(input: PixmapRef) -> Result<Gene> {
+    let start = Instant::now();
+
     let mut rng = SmallRng::from_entropy();
     let mut prev: Population = init_generation();
 
@@ -291,11 +293,19 @@ fn run(input: PixmapRef) -> Result<Gene> {
             println!("Hit time limit, stopping early...");
             break;
         }
-        println!("{i}/{generations}");
+
         let parents = select_parents(input, prev);
         let mut current = crossover_genes(&mut rng, parents);
         mutate_genes(&mut rng, input, &mut current);
         prev = current;
+
+        let elapsed = start.elapsed();
+        // println!("Elapsed time: {:.2?} seconds, {i}/{generations}, eval {:.2?} - {:.2?}", elapsed.as_secs_f64(), prev[0].eval.get().unwrap_or_default(), prev[prev.len() - 1].eval.get().unwrap_or_default());
+        println!("Elapsed time: {:.2?} seconds, {i}/{generations}", elapsed.as_secs_f64());
+    }
+
+    if prev[0].eval.get() != None {
+        println!("Done! Final score: {}", prev[0].eval.get().unwrap());
     }
 
     Ok(prev[0].clone())
