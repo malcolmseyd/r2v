@@ -304,11 +304,12 @@ fn run(input: PixmapRef) -> Result<Gene> {
         println!("Elapsed time: {:.2?} seconds, {i}/{generations}", elapsed.as_secs_f64());
     }
 
-    if prev[0].eval.get() != None {
-        println!("Done! Final score: {}", prev[0].eval.get().unwrap());
-    }
+    let best = &prev[0];
 
-    Ok(prev[0].clone())
+    let score = best.eval.get().unwrap_or_else(|| evaluate(input, &prev[0]));
+    println!("Done! Final score: {}", score);
+
+    Ok(best.clone())
 }
 
 fn init_generation() -> Population {
