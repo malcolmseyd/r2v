@@ -48,7 +48,7 @@ struct Args {
     size: usize,
 
     ///  A number in range [0,1] representing the percentage of each generation to keep as parents
-    #[arg(long, short, default_value_t = 0.5)]
+    #[arg(long, short, default_value_t = 0.05)]
     parents: f64,
 
     /// The maximum dimension to downscale the image to, clamping either the height or width
